@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from log_generator import LogGenerator
 from detection_engine import DetectionEngine
 from playbook_engine import generate_playbook
+from prevention_engine import PreventionEngine
 
 app = FastAPI(title="SentinelAI API", version="1.0.0")
 
@@ -40,6 +41,7 @@ class SentinelState:
         self.lock = asyncio.Lock()
         self.engine = DetectionEngine()
         self.generator = LogGenerator(events_per_second=15)
+        self.prevention_engine = PreventionEngine()
         self._running = False
 
     def get_stats(self) -> dict:
@@ -140,6 +142,118 @@ async def trigger_scenario(scenario: str):
     await broadcast({"type": "simulation_triggered", "scenario": scenario})
     # The generator will inject this scenario; we just flag it
     return {"status": "triggered", "scenario": scenario}
+
+# ─── Prevention API endpoints ─────────────────────────────────────────────────
+
+@app.get("/api/prevention/overview")
+def get_prevention_overview():
+    """Get data breach prevention overview."""
+    return state.prevention_engine.get_protection_overview()
+
+@app.get("/api/prevention/strategies")
+def get_protection_strategies():
+    """Get all protection strategies."""
+    return {
+        "strategies": state.prevention_engine.strategies,
+        "total": len(state.prevention_engine.strategies),
+        "active": sum(1 for s in state.prevention_engine.strategies if s["status"] == "active")
+    }
+
+@app.get("/api/prevention/strategies/{strategy_id}")
+def get_strategy(strategy_id: int):
+    """Get details of a specific strategy."""
+    strategy = next((s for s in state.prevention_engine.strategies if s["id"] == strategy_id), None)
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    return strategy
+
+@app.get("/api/prevention/vulnerabilities")
+def get_vulnerabilities():
+    """Get current vulnerabilities."""
+    if not state.prevention_engine.vulnerabilities:
+        state.prevention_engine.scan_vulnerabilities()
+    return {
+        "vulnerabilities": state.prevention_engine.vulnerabilities,
+        "total": len(state.prevention_engine.vulnerabilities),
+        "critical": sum(1 for v in state.prevention_engine.vulnerabilities if v["severity"] == "critical"),
+        "last_scan": state.prevention_engine.last_scan
+    }
+
+@app.post("/api/prevention/scan")
+def trigger_vulnerability_scan():
+    """Trigger a vulnerability scan."""
+    vulnerabilities = state.prevention_engine.scan_vulnerabilities()
+    return {
+        "scan_status": "completed",
+        "vulnerabilities_found": len(vulnerabilities),
+        "scan_time": state.prevention_engine.last_scan
+    }
+
+@app.get("/api/prevention/dlp")
+def get_dlp_status():
+    """Get Data Loss Prevention status."""
+    return state.prevention_engine.get_dlp_status()
+
+@app.post("/api/prevention/check-data")
+def check_data_exposure(data: dict):
+    """Check if data contains sensitive information."""
+    content = data.get("content", "")
+    result = state.prevention_engine.check_data_exposure(content)
+    return result
+
+@app.get("/api/prevention/encryption")
+def get_encryption_status():
+    """Get encryption status and algorithms."""
+    return state.prevention_engine.encryption_status
+
+@app.post("/api/prevention/validate-encryption")
+def validate_encryption(config: dict):
+    """Validate encryption algorithm and key size."""
+    algorithm = config.get("algorithm")
+    key_size = config.get("key_size")
+    
+    if not algorithm or not key_size:
+        raise HTTPException(status_code=400, detail="algorithm and key_size required")
+    
+    is_valid = state.prevention_engine.validate_encryption(algorithm, key_size)
+    return {
+        "algorithm": algorithm,
+        "key_size": key_size,
+        "valid": is_valid,
+        "recommendation": f"{algorithm}-{key_size} is {'secure' if is_valid else 'not recommended'}"
+    }
+
+@app.get("/api/prevention/compliance")
+def get_compliance_status():
+    """Get compliance status (GDPR, HIPAA, PCI-DSS, SOC2)."""
+    return state.prevention_engine.get_compliance_status()
+
+@app.get("/api/prevention/audit-logs")
+def get_audit_logs(limit: int = 50):
+    """Get audit logs."""
+    logs = state.prevention_engine.get_audit_logs(limit)
+    return {"logs": logs, "total": len(logs)}
+
+@app.post("/api/prevention/remediate/{vuln_id}")
+async def remediate_vulnerability(vuln_id: int, action: dict):
+    """Apply remediation action to a vulnerability."""
+    action_type = action.get("action")
+    if not action_type:
+        raise HTTPException(status_code=400, detail="action parameter required")
+    
+    result = state.prevention_engine.remediate_vulnerability(vuln_id, action_type)
+    if result["success"]:
+        await broadcast({
+            "type": "remediation_applied",
+            "vulnerability_id": vuln_id,
+            "action": action_type
+        })
+    return result
+
+@app.get("/api/prevention/report")
+def export_prevention_report(report_type: str = "full"):
+    """Export prevention report."""
+    return state.prevention_engine.export_report(report_type)
 
 @app.get("/api/mitre")
 def get_mitre_coverage():
